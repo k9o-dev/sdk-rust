@@ -1,0 +1,99 @@
+//! Project-plane audit log namespace — `client.audit()`.
+
+use crate::envelope::Response;
+use crate::http::{request, HttpClientConfig};
+use crate::kerror::KError;
+use crate::stream::require_project;
+use crate::url_grammar::project_path;
+use reqwest::Method;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// Audit event record.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEvent {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    #[serde(default)]
+    pub actor_id: Option<String>,
+    #[serde(default)]
+    pub target_kind: Option<String>,
+    #[serde(default)]
+    pub target_id: Option<String>,
+    #[serde(default)]
+    pub payload: Value,
+    pub occurred_at: String,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub trace_id: Option<String>,
+}
+
+/// Optional filters for audit queries (project-plane + org-plane + me).
+#[derive(Debug, Default, Clone)]
+pub struct AuditQueryOpts<'a> {
+    pub since: Option<&'a str>,
+    pub until: Option<&'a str>,
+    pub event_type: Option<&'a str>,
+    pub actor_id: Option<&'a str>,
+    pub target_kind: Option<&'a str>,
+    pub target_id: Option<&'a str>,
+    pub limit: Option<u32>,
+    pub cursor: Option<&'a str>,
+}
+
+impl<'a> AuditQueryOpts<'a> {
+    pub(crate) fn to_query(&self) -> Vec<(String, String)> {
+        let mut q: Vec<(String, String)> = Vec::new();
+        if let Some(v) = self.since {
+            q.push(("since".into(), v.into()));
+        }
+        if let Some(v) = self.until {
+            q.push(("until".into(), v.into()));
+        }
+        if let Some(v) = self.event_type {
+            q.push(("type".into(), v.into()));
+        }
+        if let Some(v) = self.actor_id {
+            q.push(("actorId".into(), v.into()));
+        }
+        if let Some(v) = self.target_kind {
+            q.push(("targetKind".into(), v.into()));
+        }
+        if let Some(v) = self.target_id {
+            q.push(("targetId".into(), v.into()));
+        }
+        if let Some(v) = self.limit {
+            q.push(("limit".into(), v.to_string()));
+        }
+        if let Some(v) = self.cursor {
+            q.push(("cursor".into(), v.into()));
+        }
+        q
+    }
+}
+
+/// Audit namespace — `client.audit()` (project-plane).
+pub struct AuditNamespace<'a> {
+    pub(crate) config: &'a HttpClientConfig,
+}
+
+impl<'a> AuditNamespace<'a> {
+    /// Query the audit log (reverse-chronological; filters AND-compose).
+    pub async fn query(
+        &self,
+        opts: AuditQueryOpts<'_>,
+    ) -> Result<Response<Vec<AuditEvent>>, KError> {
+        let slug = require_project(self.config, "audit")?;
+        request::<Vec<AuditEvent>, ()>(
+            self.config,
+            Method::GET,
+            &project_path(slug, "audit-log"),
+            None,
+            Some(&opts.to_query()),
+        )
+        .await
+    }
+}
